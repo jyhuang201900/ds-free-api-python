@@ -1,0 +1,29 @@
+[server]
+host = "127.0.0.1"
+port = 5317
+
+# 账号文件路径（相对于 config.toml 所在目录，默认 accounts.txt）
+# accounts_file = "accounts.txt"
+
+# API 访问令牌，留空则不鉴权
+# [[server.api_tokens]]
+# token = "sk-your-token"
+# description = "开发测试"
+
+[deepseek]
+# API 基础地址（默认）
+# api_base = "https://chat.deepseek.com/api/v0"
+
+# WASM 文件完整 URL（PoW 计算所需）
+# wasm_url = "https://fe-static.deepseek.com/chat/static/sha3_wasm_bg.7b9ca65ddd.wasm"
+
+# X-Client-Version 请求头
+# client_version = "1.8.0"
+
+# X-Client-Platform 请求头
+# client_platform = "web"
+
+# 支持的模型类型列表
+# model_types = ["default", "expert"]
+# max_input_tokens = [1048576, 1048576]
+# max_output_tokens = [384000, 384000]

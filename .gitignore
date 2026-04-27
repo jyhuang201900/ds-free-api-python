@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+
+# Runtime files
+*.log
+
+# Sensitive files — DO NOT commit
+accounts.txt
+accounts_cache.json
+config.toml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+test_output*.txt
+server_log.txt
+server_stderr.txt
+server_stdout.txt

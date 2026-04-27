@@ -1,0 +1,8 @@
+# 账号列表（每行一个，逗号分隔）
+#
+# 邮箱格式：email,password
+user1@example.com,password1
+user2@example.com,password2
+#
+# 手机号格式：mobile,password  或  mobile,area_code,password
+# 13800138000,+86,password3
