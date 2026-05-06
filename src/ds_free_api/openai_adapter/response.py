@@ -445,6 +445,9 @@ async def stream_response(
                 if state.finish_reason and not stopped:
                     stopped = True
                     finish = state.finish_reason
+                    # 检查是否包含 tool_calls，修正 finish_reason
+                    if parse_tool_calls(buffer):
+                        finish = FINISH_TOOL_CALLS
                     remaining = buffer[sent_len:]
                     if remaining:
                         yield _chunk_to_bytes(ChatCompletionChunk(
@@ -566,6 +569,9 @@ async def stream_response_dual(
                 if state.finish_reason and not stopped:
                     stopped = True
                     finish = state.finish_reason
+                    # 检查是否包含 tool_calls，修正 finish_reason
+                    if parse_tool_calls(buffer):
+                        finish = FINISH_TOOL_CALLS
                     remaining = buffer[sent_len:]
                     if remaining:
                         yield _chunk_to_bytes_and_dict(ChatCompletionChunk(

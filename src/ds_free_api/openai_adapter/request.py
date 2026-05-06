@@ -449,20 +449,6 @@ def _extract_images(req) -> list[dict]:
     return images
 
 
-def _format_tool_calls(tool_calls: list) -> str:
-    """格式化工具调用"""
-    calls = []
-    for tc in tool_calls:
-        if tc.function:
-            calls.append({
-                "name": tc.function.name,
-                "arguments": tc.function.arguments,
-            })
-    if not calls:
-        return ""
-    return f"<tool_calls>{json.dumps(calls, ensure_ascii=False)}</tool_calls>"
-
-
 # ============================================================================
 # 模型解析
 # ============================================================================
