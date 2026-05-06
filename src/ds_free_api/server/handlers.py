@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 
@@ -63,14 +64,16 @@ async def chat_completions(request: Request) -> Response:
         is_stream = b'"stream"' in body and b'"stream":true' in body.replace(b' ', b'')
 
         if is_stream:
-            logger.debug("chat_completions: 流式请求开始")
+            logger.info("chat_completions: 流式请求开始")
 
             async def safe_stream():
                 try:
                     stream = await state.adapter.chat_completions_stream(body)
                     async for chunk in stream:
                         yield chunk
-                    logger.debug("chat_completions: 流式请求完成")
+                    logger.info("chat_completions: 流式请求完成")
+                except asyncio.CancelledError:
+                    logger.warning("chat_completions: 客户端断开连接")
                 except Exception as e:
                     logger.warning(f"chat_completions 流式异常: {e}")
                     # 发送错误 chunk 后正常结束
@@ -149,7 +152,7 @@ async def anthropic_messages(request: Request) -> Response:
         is_stream = b'"stream"' in body and b'"stream":true' in body.replace(b' ', b'')
 
         if is_stream:
-            logger.debug("anthropic_messages: 流式请求开始")
+            logger.info("anthropic_messages: 流式请求开始")
             request_id = f"req_{uuid.uuid4().hex[:24]}"
 
             async def safe_stream():
@@ -157,7 +160,9 @@ async def anthropic_messages(request: Request) -> Response:
                     stream = await state.anthropic_compat.messages_stream(body)
                     async for chunk in stream:
                         yield chunk
-                    logger.debug("anthropic_messages: 流式请求完成")
+                    logger.info("anthropic_messages: 流式请求完成")
+                except asyncio.CancelledError:
+                    logger.warning("anthropic_messages: 客户端断开连接")
                 except Exception as e:
                     logger.warning(f"anthropic_messages 流式异常: {e}")
                     try:
