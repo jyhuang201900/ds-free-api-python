@@ -322,6 +322,9 @@ async def from_chat_completion_stream_structured(
 
     except Exception as e:
         logger.warning(f"Anthropic 流式响应中途出错: {e}")
+
+    # 确保流正常结束时关闭所有打开的 block（包括无 finish_reason 的情况）
+    if sent_message_start:
         if thinking_block_open:
             yield _sse_event("content_block_delta", {
                 "type": "content_block_delta",
@@ -332,18 +335,21 @@ async def from_chat_completion_stream_structured(
                 "type": "content_block_stop",
                 "index": next_block_index - 1,
             })
+            thinking_block_open = False
         if text_block_open:
             yield _sse_event("content_block_stop", {
                 "type": "content_block_stop",
                 "index": next_block_index - 1,
             })
-        if sent_message_start:
-            yield _sse_event("message_delta", {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {"output_tokens": 0},
-            })
-            yield _sse_event("message_stop", {"type": "message_stop"})
+            text_block_open = False
+
+        output_tokens = usage_data.get("completion_tokens", 0) if usage_data else 0
+        yield _sse_event("message_delta", {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": output_tokens},
+        })
+        yield _sse_event("message_stop", {"type": "message_stop"})
 
     if not sent_message_start:
         yield _sse_event("message_start", {

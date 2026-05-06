@@ -233,6 +233,9 @@ class Completions:
                     url = img.get("url", "")
                     if url:
                         resp = await self.client.http.get(url, timeout=30)
+                        if resp.status_code >= 400:
+                            logger.warning(f"图片下载失败: {url} -> HTTP {resp.status_code}")
+                            return None
                         data = resp.content
                     else:
                         return None

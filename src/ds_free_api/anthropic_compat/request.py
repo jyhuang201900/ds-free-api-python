@@ -176,11 +176,9 @@ def to_openai_request(body: bytes) -> tuple[bytes, str]:
         else:
             openai["reasoning_effort"] = "minimal"
 
-    # web_search_options：默认开启联网搜索
+    # web_search_options：仅在用户显式提供时传递
     if req.web_search_options:
         openai["web_search_options"] = req.web_search_options
-    else:
-        openai["web_search_options"] = {"search_context_size": "medium"}
 
     return json.dumps(openai).encode(), original_model
 
