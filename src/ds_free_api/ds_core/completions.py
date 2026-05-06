@@ -61,9 +61,8 @@ class Completions:
     async def v0_chat(self, req: ChatRequest, image_attachments: list[dict] | None = None, message_id_sink: list | None = None) -> AsyncIterator[bytes]:
         """发起对话请求，返回 SSE 流
 
-        真正多轮对话模式：
-        - 全部走 completion 端点 + parent_message_id 链式传递
-        - DeepSeek 后端自动加载完整对话上下文，无需 ChatML 压缩
+        完整历史模式：
+        - prompt 包含完整对话历史（ChatML 格式），无需依赖 parent_message_id
         - 有文件附件时附加 ref_file_ids
         - edit_message 仅作为 completion 失败时的 fallback
 
@@ -94,8 +93,8 @@ class Completions:
                 if session_id is None:
                     raise CoreError.provider_error(f"账号缺少 {req.model_type} 的 session")
 
-                # 获取当前 parent_message_id（多轮对话链）
-                parent_message_id = account.get_parent_message_id(req.model_type)
+                # 完整历史模式：不再需要 parent_message_id
+                parent_message_id = None
 
                 # 处理文件附件（与 PoW 并行：文件上传需要独立的 PoW）
                 ref_file_ids = list(req.ref_file_ids)
@@ -136,17 +135,11 @@ class Completions:
                 try:
                     async for chunk in self.client.completion_stream(token, pow_header, payload):
                         yield chunk
-                    # 流结束，从 sink 获取 message_id 更新 account
-                    if message_id_sink and len(message_id_sink) > 0:
-                        msg_id = message_id_sink[0]
-                        account.set_parent_message_id(req.model_type, msg_id)
-                        logger.debug(f"多轮对话: {req.model_type} parent_message_id -> {msg_id}")
                     # completion 成功：增加消息计数
                     account.incr_message_count(req.model_type)
                 except ClientError as e:
                     # completion 失败时 fallback 到 edit_message
                     logger.warning(f"completion 失败，fallback 到 edit_message: {e}")
-                    account.set_parent_message_id(req.model_type, None)  # 链断裂
                     try:
                         pow_header2 = await self._compute_pow(
                             token, target_path="/api/v0/chat/edit_message", account=account,
@@ -161,10 +154,6 @@ class Completions:
                         )
                         async for chunk in self.client.edit_message_stream(token, pow_header2, fallback_payload):
                             yield chunk
-                        # fallback 也从 sink 获取 message_id（edit_message 流也含 message_id）
-                        if message_id_sink and len(message_id_sink) > 0:
-                            account.set_parent_message_id(req.model_type, message_id_sink[0])
-                            logger.debug(f"多轮对话(fallback): {req.model_type} parent_message_id -> {message_id_sink[0]}")
                         # fallback 成功：增加消息计数
                         account.incr_message_count(req.model_type)
                     except ClientError as e2:

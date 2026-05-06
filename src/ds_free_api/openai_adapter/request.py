@@ -239,13 +239,10 @@ def _extract_tools(req: ChatCompletionRequest) -> ToolContext:
 
 
 def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
-    """构建 prompt（真正的多轮对话模式）
+    """构建 prompt（完整历史模式）
 
-    DeepSeek 后端通过 parent_message_id 自动加载完整对话上下文，
-    无需 ChatML 压缩历史。只需发送：
-    1. system prompt（如有）
-    2. tool 定义（如有）
-    3. 最后一条用户消息
+    将 OpenAI messages 转换为 ChatML 格式的完整对话历史，
+    确保上下文完整传递给 DeepSeek。
     """
     parts: list[str] = []
 
@@ -287,27 +284,32 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
 
         tool_reminder = "\n".join(tool_lines)
 
-    # system prompt（取第一条 system 消息）
+    # 转换所有消息为 ChatML 格式
     for msg in req.messages:
-        if msg.role == "system":
-            parts.append(msg.content.get_text() if msg.content else "")
-            break
+        role = msg.role
+        content = _get_message_text(msg)
 
-    # tool reminder
-    if tool_reminder:
-        parts.append(tool_reminder)
+        if role == "system":
+            # system 消息 + tool reminder
+            if tool_reminder:
+                content = f"{content}\n\n{tool_reminder}" if content else tool_reminder
+            parts.append(f"<|im_start|>system\n{content}<|im_end|>")
+        elif role == "user":
+            parts.append(f"<|im_start|>user\n{content}<|im_end|>")
+        elif role == "assistant":
+            parts.append(f"<|im_start|>assistant\n{content}<|im_end|>")
+        elif role == "tool":
+            # tool 响应
+            parts.append(f"<|im_start|>tool\n{content}<|im_end|>")
 
-    # 最后一条用户消息（DeepSeek 后端管理完整上下文，只需发当前消息）
-    last_user_msg = ""
-    for msg in reversed(req.messages):
-        if msg.role == "user":
-            last_user_msg = _get_message_text(msg)
-            break
+    # 如果没有 system 消息但有 tools，添加 tool reminder 作为 system
+    if tool_reminder and not any(m.role == "system" for m in req.messages):
+        parts.insert(0, f"<|im_start|>system\n{tool_reminder}<|im_end|>")
 
-    if last_user_msg:
-        parts.append(last_user_msg)
+    # 添加 assistant 开始标记（引导模型生成）
+    parts.append("<|im_start|>assistant")
 
-    return "\n\n".join(p for p in parts if p)
+    return "\n".join(parts)
 
 
 def _get_message_text(msg) -> str:
