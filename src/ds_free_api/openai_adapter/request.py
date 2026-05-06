@@ -1,9 +1,9 @@
 """OpenAI 请求解析 —— 将 OpenAI ChatCompletion 请求降级为 ds_core::ChatRequest
 
-多轮对话模式：
-- DeepSeek 后端通过 parent_message_id 自动加载完整对话上下文
-- 仅发送 system prompt + tool 定义 + 最后一条用户消息
-- 无需 ChatML 压缩历史
+完整历史模式：
+- 将所有 messages 转换为 ChatML 格式的完整对话历史
+- 确保上下文完整传递给 DeepSeek，不依赖 parent_message_id
+- 支持 system/user/assistant/tool 角色和 tool_calls
 """
 
 from __future__ import annotations
@@ -297,10 +297,19 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
         elif role == "user":
             parts.append(f"<|im_start|>user\n{content}<|im_end|>")
         elif role == "assistant":
+            # assistant 消息可能包含 tool_calls
+            if msg.tool_calls:
+                # 将 tool_calls 转换为 <tool_calls> 格式
+                tool_calls_str = _format_tool_calls(msg.tool_calls)
+                if content:
+                    content = f"{content}\n{tool_calls_str}"
+                else:
+                    content = tool_calls_str
             parts.append(f"<|im_start|>assistant\n{content}<|im_end|>")
         elif role == "tool":
-            # tool 响应
-            parts.append(f"<|im_start|>tool\n{content}<|im_end|>")
+            # tool 响应：包含 tool_call_id
+            tool_call_id = msg.tool_call_id or "unknown"
+            parts.append(f"<|im_start|>tool\ntool_call_id: {tool_call_id}\n{content}<|im_end|>")
 
     # 如果没有 system 消息但有 tools，添加 tool reminder 作为 system
     if tool_reminder and not any(m.role == "system" for m in req.messages):
@@ -310,6 +319,19 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
     parts.append("<|im_start|>assistant")
 
     return "\n".join(parts)
+
+
+def _format_tool_calls(tool_calls: list) -> str:
+    """将 tool_calls 转换为 <tool_calls> 格式"""
+    calls = []
+    for tc in tool_calls:
+        if tc.function:
+            call_dict = {
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+            calls.append(call_dict)
+    return f"<tool_calls>{json.dumps(calls, ensure_ascii=False)}</tool_calls>"
 
 
 def _get_message_text(msg) -> str:

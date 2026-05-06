@@ -13,7 +13,7 @@
 - **双协议兼容** — 同时提供 OpenAI `/v1/chat/completions` 和 Anthropic `/v1/messages` 端点
 - **AWS WAF 绕过** — Playwright 自动通过 AWS WAF Bot Control JS Challenge，支持多账号并发登录
 - **联网搜索** — 默认开启，DeepSeek 实时搜索，支持 `web_search_options` 参数
-- **多轮对话** — parent_message_id 链式传递，DeepSeek 后端管理完整上下文
+- **多轮对话** — ChatML 格式完整历史传递，确保上下文完整
 - **图片/文件上传** — 支持 base64/URL 图片上传，DeepSeek OCR 文字识别
 - **超多账号管理** — 账号池 + per-model-type 索引 + 熔断机制 + 后台健康监控自动恢复
 - **高并发** — per-model-type 锁 + 请求排队等待 + httpx 200 连接池 + uvicorn backlog 2048
@@ -220,7 +220,7 @@ curl http://127.0.0.1:5317/v1/messages \
               ds_core/
               ├─ accounts.py  — 账号池（per-type索引/熔断/健康监控/缓存/排队等待）
               ├─ client.py    — HTTP 客户端（智能重试/auth缓存/200连接池/流空闲超时/WAF token自动刷新）
-              ├─ completions.py — 对话编排（completion+fallback/图片并行上传/多轮parent_message_id）
+              ├─ completions.py — 对话编排（completion+fallback/图片并行上传/完整历史ChatML）
               ├─ pow.py       — PoW 求解器（WASM实例池化/动态符号探测）
               └─ waf_bypass.py — AWS WAF 绕过（Playwright headless=False + 反检测脚本）
 ```
@@ -264,7 +264,7 @@ curl http://127.0.0.1:5317/v1/messages \
 | 智能重试 | 指数退避+抖动，login 遇到 202/405 自动刷新 WAF token 重试 |
 | AWS WAF 绕过 | Playwright headless=False + 反检测脚本，多账号并发登录自动续期 WAF token |
 | 流空闲超时 | 60s 无数据自动断开，防止挂起 |
-| 多轮对话链 | parent_message_id 链式传递，DeepSeek 后端管理完整上下文 |
+| 完整历史模式 | ChatML 格式传递完整对话历史，不依赖 parent_message_id |
 | 联网搜索 | 默认开启，`web_search_options` 可选配置，有文件附件时自动禁用 |
 
 ---
