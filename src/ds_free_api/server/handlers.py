@@ -63,9 +63,24 @@ async def chat_completions(request: Request) -> Response:
         is_stream = b'"stream"' in body and b'"stream":true' in body.replace(b' ', b'')
 
         if is_stream:
-            stream = await state.adapter.chat_completions_stream(body)
+            logger.debug("chat_completions: 流式请求开始")
+
+            async def safe_stream():
+                try:
+                    stream = await state.adapter.chat_completions_stream(body)
+                    async for chunk in stream:
+                        yield chunk
+                    logger.debug("chat_completions: 流式请求完成")
+                except Exception as e:
+                    logger.warning(f"chat_completions 流式异常: {e}")
+                    # 发送错误 chunk 后正常结束
+                    try:
+                        yield b"data: {\"error\": {\"message\": \"stream error\"}}\n\n"
+                    except:
+                        pass
+
             return StreamingResponse(
-                stream,
+                safe_stream(),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -134,10 +149,24 @@ async def anthropic_messages(request: Request) -> Response:
         is_stream = b'"stream"' in body and b'"stream":true' in body.replace(b' ', b'')
 
         if is_stream:
-            stream = await state.anthropic_compat.messages_stream(body)
+            logger.debug("anthropic_messages: 流式请求开始")
             request_id = f"req_{uuid.uuid4().hex[:24]}"
+
+            async def safe_stream():
+                try:
+                    stream = await state.anthropic_compat.messages_stream(body)
+                    async for chunk in stream:
+                        yield chunk
+                    logger.debug("anthropic_messages: 流式请求完成")
+                except Exception as e:
+                    logger.warning(f"anthropic_messages 流式异常: {e}")
+                    try:
+                        yield b"data: {\"type\": \"error\", \"error\": {\"message\": \"stream error\"}}\n\n"
+                    except:
+                        pass
+
             return StreamingResponse(
-                stream,
+                safe_stream(),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
