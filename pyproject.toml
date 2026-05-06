@@ -13,6 +13,7 @@ dependencies = [
     "tomli>=2.0; python_version < '3.11'",
     "tiktoken>=0.8.0",
     "wasmtime>=25.0.0",
+    "playwright>=1.40.0",
 ]
 
 [project.optional-dependencies]

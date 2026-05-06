@@ -16,12 +16,14 @@ from typing import Any, AsyncIterator
 import httpx
 from pydantic import BaseModel, Field
 
+from .waf_bypass import get_waf_cookies
+
 logger = logging.getLogger("ds_free_api.ds_core.client")
 
 
 class RetryConfig(BaseModel):
     """重试配置"""
-    max_attempts: int = 3
+    max_attempts: int = 6
     initial_backoff: float = 1.0
     max_backoff: float = 30.0
     jitter: bool = True
@@ -194,11 +196,42 @@ class DsClient:
             ),
         )
         # 缓存 per-token auth headers，避免每次请求创建新 dict
+        # AWS WAF bypass 状态（多账号并发登录只触发一次 Playwright）
+        self._waf_lock = asyncio.Lock()
+        self._waf_ready = False
+
         self._auth_cache: dict[str, dict[str, str]] = {}
         self._base_headers: dict[str, str] = {
             "User-Agent": user_agent,
             "X-Client-Version": client_version,
             "X-Client-Platform": client_platform,
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Origin": "https://chat.deepseek.com",
+            "Referer": "https://chat.deepseek.com/sign_in",
+            "Content-Type": "application/json",
+            "Sec-Ch-Ua": '"Chromium";v="145", "Not:A-Brand";v="99"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "Priority": "u=1, i",
+        }
+        # 浏览器导航专用 headers（GET sign_in 不能用 Content-Type，会 405）
+        self._signin_headers: dict[str, str] = {
+            "User-Agent": user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Priority": "u=0, i",
         }
 
     def _auth_headers(self, token: str) -> dict[str, str]:
@@ -243,19 +276,140 @@ class DsClient:
 
         return inner.get("biz_data")
 
+    async def _ensure_waf_cookies(self) -> None:
+        """确保 httpx client 拥有有效的 AWS WAF cookies。
+
+        首次调用或 token 失效后（_waf_ready=False）会启动 Playwright 获取新 token。
+        多账号并发时通过 _waf_lock 保证只启动一次浏览器。
+        """
+        if self._waf_ready:
+            return
+        async with self._waf_lock:
+            if self._waf_ready:
+                return
+
+            # 直接启动 Playwright 获取新 WAF token（不再探测，更快）
+            logger.info("启动 Playwright 获取 WAF cookies...")
+            raw_cookies = await get_waf_cookies(user_agent=self.user_agent)
+
+            # 清除旧 WAF cookies，避免新旧 token 混杂
+            # httpx CookieJar 没有按 name 删除的 API，直接清空再注入
+            self.http.cookies.clear()
+
+            # 使用原始 domain 注入 cookies（如 aws-waf-token domain=.deepseek.com）
+            for c in raw_cookies:
+                domain = c.get("domain", "chat.deepseek.com")
+                path = c.get("path", "/")
+                self.http.cookies.set(c["name"], c["value"], domain=domain, path=path)
+
+            logger.info(f"已注入 {len(raw_cookies)} 个 WAF cookies 到 httpx client")
+            self._waf_ready = True
+
     async def login(self, payload: LoginPayload) -> LoginData:
-        resp = await self.http.post(
-            f"{self.api_base}{EP_USERS_LOGIN}",
-            headers={"User-Agent": self.user_agent},
-            json=payload.to_api_dict(),
-        )
-        if resp.status_code >= 400:
-            raise HttpError(resp.status_code, resp.text)
+        # 先确保通过 AWS WAF JS Challenge（14 个账号并发也只启动一次 Playwright）
+        await self._ensure_waf_cookies()
 
-        if not resp.text or not resp.text.strip():
-            raise ClientError(f"login 返回空响应 (status={resp.status_code})")
+        # 预热：先访问 sign_in 页面以建立 cookie/session（使用浏览器导航 headers）
+        try:
+            await self.http.get(
+                "https://chat.deepseek.com/sign_in",
+                headers=self._signin_headers,
+                follow_redirects=True,
+            )
+        except Exception:
+            pass  # 预热失败不影响主流程
 
-        data = resp.json()
+        last_resp: httpx.Response | None = None
+        last_exc: Exception | None = None
+        for attempt in range(1, self._retry_config.max_attempts + 1):
+            try:
+                resp = await self.http.post(
+                    f"{self.api_base}{EP_USERS_LOGIN}",
+                    headers=self._base_headers,
+                    json=payload.to_api_dict(),
+                )
+                last_resp = resp
+                if resp.status_code >= 400:
+                    raise HttpError(resp.status_code, resp.text)
+
+                # 部分情况下服务端会返回 202 Accepted 且无 body（异步受理），稍后重试即可。
+                body = resp.text
+                if resp.status_code == 202 or not body or not body.strip():
+                    raise ClientError(f"login 返回空响应 (status={resp.status_code})")
+
+                data = resp.json()
+                break
+            except HttpError as e:
+                last_exc = e
+                # 405 Human Verification = WAF token 失效/超限，刷新后重试
+                # 注意：202 不会走 HttpError 分支（202 < 400），由 ClientError 分支处理
+                if e.status == 405 and "Human Verification" in e.body:
+                    if attempt >= self._retry_config.max_attempts:
+                        raise
+                    logger.warning(
+                        f"login 失败 (status={e.status})，刷新 WAF cookies 后重试"
+                    )
+                    self._waf_ready = False
+                    await self._ensure_waf_cookies()
+                    # 重新预热 sign_in 页面
+                    try:
+                        await self.http.get(
+                            "https://chat.deepseek.com/sign_in",
+                            headers=self._signin_headers,
+                            follow_redirects=True,
+                        )
+                    except Exception:
+                        pass
+                    continue
+                # 其他 HTTP 错误正常重试
+                if attempt >= self._retry_config.max_attempts:
+                    raise
+                delay = SmartRetry.get_delay(attempt, self._retry_config)
+                logger.warning(
+                    f"login 失败，第 {attempt} 次重试，等待 {delay:.1f}s: {e}"
+                )
+                await asyncio.sleep(delay)
+            except ClientError as e:
+                last_exc = e
+                # login 返回 202 空 body = WAF token 超限，刷新后重试
+                if "login 返回空响应" in str(e):
+                    if attempt >= self._retry_config.max_attempts:
+                        raise
+                    logger.warning("login 返回空响应，刷新 WAF cookies 后重试")
+                    self._waf_ready = False
+                    await self._ensure_waf_cookies()
+                    # 重新预热 sign_in 页面
+                    try:
+                        await self.http.get(
+                            "https://chat.deepseek.com/sign_in",
+                            headers=self._signin_headers,
+                            follow_redirects=True,
+                        )
+                    except Exception:
+                        pass
+                    continue
+                if attempt >= self._retry_config.max_attempts:
+                    raise
+                delay = SmartRetry.get_delay(attempt, self._retry_config)
+                logger.warning(
+                    f"login 失败，第 {attempt} 次重试，等待 {delay:.1f}s: {e}"
+                )
+                await asyncio.sleep(delay)
+            except Exception as e:
+                last_exc = e
+                if attempt >= self._retry_config.max_attempts:
+                    raise
+                delay = SmartRetry.get_delay(attempt, self._retry_config)
+                logger.warning(
+                    f"login 失败，第 {attempt} 次重试，等待 {delay:.1f}s: {e}"
+                )
+                await asyncio.sleep(delay)
+        else:
+            # 理论不可达：for 循环内要么 break 要么 raise
+            raise last_exc or ClientError(
+                f"login 失败且无异常信息 (status={last_resp.status_code if last_resp else 'unknown'})"
+            )
+
         code = data.get("code", -1)
         msg = data.get("msg", "")
         if code != 0:

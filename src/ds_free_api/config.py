@@ -127,9 +127,9 @@ class DeepSeekConfig(BaseModel):
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/134.0.0.0 Safari/537.36"
+        "Chrome/145.0.0.0 Safari/537.36"
     )
-    client_version: str = "1.8.0"
+    client_version: str = "2.0.0"
     client_platform: str = "web"
     model_types: list[str] = Field(default_factory=lambda: ["default", "expert"])
     max_input_tokens: list[int] = Field(default_factory=lambda: [1_048_576, 1_048_576])

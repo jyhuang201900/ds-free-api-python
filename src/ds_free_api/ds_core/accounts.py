@@ -13,8 +13,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
+import os
 import random
 import time
 from contextlib import asynccontextmanager
@@ -34,8 +37,8 @@ from .pow import PowError, PowSolver
 
 # 启动优化：缓存验证并发度
 VERIFY_CONCURRENCY = 8
-# 后台健康监控间隔（秒）
-HEALTH_MONITOR_INTERVAL = 120.0
+# 后台健康监控间隔（秒）- 缩短到 60s 更快发现不健康账号
+HEALTH_MONITOR_INTERVAL = 60.0
 # 请求排队等待超时（秒）
 QUEUE_WAIT_TIMEOUT = 30.0
 
@@ -257,15 +260,16 @@ class AccountPool:
         else:
             need_init = list(creds_list)
 
-        # 缓存未命中的账号才需要初始化（限制并发度避免限流）
+        # 缓存未命中的账号才需要初始化（并发 + login 失败自动刷新 WAF token）
         if need_init:
-            # 降低并发度，避免频率限制
-            semaphore = asyncio.Semaphore(2)  # 从 3 降到 2
+            # client.py 已有自动刷新机制：login 遇到 202/405 会立即获取新 WAF token
+            # 因此可以较高并发，WAF token 用完会自动续期
+            semaphore = asyncio.Semaphore(3)
 
             async def _limited_init(creds: AccountConfig):
                 async with semaphore:
-                    # 添加随机延迟，避免同时请求
-                    await asyncio.sleep(random.uniform(1, 3))
+                    # 短延迟避免同时请求
+                    await asyncio.sleep(random.uniform(2, 4))
                     return await self._init_account(creds, model_types, client, solver)
 
             tasks = [_limited_init(creds) for creds in need_init]
@@ -354,11 +358,14 @@ class AccountPool:
         solver: PowSolver,
     ) -> Account:
         """尝试初始化单个账号（登录 + 并行创建 session + health_check）"""
+        # 生成 device_id：浏览器使用 B+base64 随机字符串
+        device_id = "B" + base64.b64encode(os.urandom(96)).decode()
         login_payload = LoginPayload(
             email=creds.email or None,
             mobile=creds.mobile or None,
             password=creds.password,
             area_code=creds.area_code or None,
+            device_id=device_id,
         )
 
         login_data = await client.login(login_payload)

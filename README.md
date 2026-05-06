@@ -11,6 +11,7 @@
 ## 特性
 
 - **双协议兼容** — 同时提供 OpenAI `/v1/chat/completions` 和 Anthropic `/v1/messages` 端点
+- **AWS WAF 绕过** — Playwright 自动通过 AWS WAF Bot Control JS Challenge，支持多账号并发登录
 - **联网搜索** — 默认开启，DeepSeek 实时搜索，支持 `web_search_options` 参数
 - **多轮对话** — parent_message_id 链式传递，DeepSeek 后端管理完整上下文
 - **图片/文件上传** — 支持 base64/URL 图片上传，DeepSeek OCR 文字识别
@@ -30,6 +31,9 @@
 ```bash
 # 需要 Python >= 3.11
 pip install -e .
+
+# 安装 Playwright 浏览器（用于绕过 AWS WAF）
+playwright install chromium
 ```
 
 ### 2. 配置账号
@@ -215,9 +219,10 @@ curl http://127.0.0.1:5317/v1/messages \
                     ↓
               ds_core/
               ├─ accounts.py  — 账号池（per-type索引/熔断/健康监控/缓存/排队等待）
-              ├─ client.py    — HTTP 客户端（智能重试/auth缓存/200连接池/流空闲超时）
+              ├─ client.py    — HTTP 客户端（智能重试/auth缓存/200连接池/流空闲超时/WAF token自动刷新）
               ├─ completions.py — 对话编排（completion+fallback/图片并行上传/多轮parent_message_id）
-              └─ pow.py       — PoW 求解器（WASM实例池化/动态符号探测）
+              ├─ pow.py       — PoW 求解器（WASM实例池化/动态符号探测）
+              └─ waf_bypass.py — AWS WAF 绕过（Playwright headless=False + 反检测脚本）
 ```
 
 ### 请求链路
@@ -253,10 +258,11 @@ curl http://127.0.0.1:5317/v1/messages \
 | 缓存异步写入 | run_in_executor 不阻塞事件循环 |
 | 条件 Gzip 压缩 | 非 SSE JSON 响应 >1KB 自动压缩，SSE 流不压缩 |
 | 请求体限制 | 10MB 上限防 OOM |
-| 后台健康监控 | 每120s 自动恢复不健康账号 |
+| 后台健康监控 | 每60s 自动恢复不健康账号 |
 | 熔断机制 | 失败3次进入5分钟冷却，选择时跳过 |
 | 连接池调优 | httpx 200连接/100 keepalive，uvicorn backlog 2048 |
-| 智能重试 | 指数退避+抖动，仅重试 5xx/网络错误 |
+| 智能重试 | 指数退避+抖动，login 遇到 202/405 自动刷新 WAF token 重试 |
+| AWS WAF 绕过 | Playwright headless=False + 反检测脚本，多账号并发登录自动续期 WAF token |
 | 流空闲超时 | 60s 无数据自动断开，防止挂起 |
 | 多轮对话链 | parent_message_id 链式传递，DeepSeek 后端管理完整上下文 |
 | 联网搜索 | 默认开启，`web_search_options` 可选配置，有文件附件时自动禁用 |
