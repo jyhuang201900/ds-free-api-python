@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
             anthropic_compat=anthropic_compat,
             api_tokens=api_tokens,
         )
-        logger.info("服务就绪")
+        logger.warning("服务就绪")
     except Exception as e:
         logger.exception(f"初始化失败: {e}")
         raise

@@ -310,7 +310,7 @@ class AccountPool:
 
         failed = len(creds_list) - len(accounts)
         cached_count = len(creds_list) - len(need_init)
-        logger.info(
+        logger.warning(
             f"账号池初始化完成: {len(accounts)}/{len(creds_list)} 成功"
             + (f" (缓存恢复 {cached_count}, 新初始化 {len(accounts) - cached_count})" if cached_count else "")
             + (f", {failed} 失败" if failed else "")

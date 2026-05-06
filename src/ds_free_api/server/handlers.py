@@ -71,7 +71,7 @@ async def chat_completions(request: Request) -> Response:
                     stream = await state.adapter.chat_completions_stream(body)
                     async for chunk in stream:
                         yield chunk
-                    logger.debug("chat_completions: 流式请求完成")
+                    logger.warning("chat_completions: 200 OK (stream)")
                 except asyncio.CancelledError:
                     logger.warning("chat_completions: 客户端断开连接")
                 except Exception as e:
@@ -93,6 +93,7 @@ async def chat_completions(request: Request) -> Response:
             )
         else:
             result = await state.adapter.chat_completions(body)
+            logger.warning("chat_completions: 200 OK")
             return Response(
                 content=result,
                 media_type="application/json",
@@ -160,7 +161,7 @@ async def anthropic_messages(request: Request) -> Response:
                     stream = await state.anthropic_compat.messages_stream(body)
                     async for chunk in stream:
                         yield chunk
-                    logger.debug("anthropic_messages: 流式请求完成")
+                    logger.warning("anthropic_messages: 200 OK (stream)")
                 except asyncio.CancelledError:
                     logger.warning("anthropic_messages: 客户端断开连接")
                 except Exception as e:
@@ -188,6 +189,7 @@ async def anthropic_messages(request: Request) -> Response:
         else:
             result = await state.anthropic_compat.messages(body)
             request_id = f"req_{uuid.uuid4().hex[:24]}"
+            logger.warning("anthropic_messages: 200 OK")
             return Response(
                 content=result,
                 media_type="application/json",
