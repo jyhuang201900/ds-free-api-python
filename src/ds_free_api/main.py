@@ -11,20 +11,29 @@ from .config import Config
 
 def main() -> None:
     """主入口函数"""
+    # 先加载配置获取日志级别
+    try:
+        config = Config.load_with_args()
+    except Exception as e:
+        logging.basicConfig(level=logging.ERROR)
+        logging.fatal(f"配置加载失败: {e}")
+        sys.exit(1)
+
+    # 配置日志级别
+    log_level = getattr(logging, config.server.log_level.upper(), logging.WARNING)
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         stream=sys.stderr,
     )
 
-    try:
-        config = Config.load_with_args()
-    except Exception as e:
-        logging.fatal(f"配置加载失败: {e}")
-        sys.exit(1)
+    # 抑制第三方库日志
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
-    logging.info(f"配置加载成功: host={config.server.host}, port={config.server.port}")
-    logging.info(f"账号数: {len(config.accounts)}, 模型类型: {config.deepseek.model_types}")
+    logging.warning(f"服务启动: host={config.server.host}, port={config.server.port}, log_level={config.server.log_level}")
 
     import uvicorn
     from .server.app import create_app
@@ -33,18 +42,18 @@ def main() -> None:
 
     try:
         # 高并发配置
-        # 单进程模式（共享账号池状态），通过 backlog 和 timeout 支持高并发
         uvicorn.run(
             app,
             host=config.server.host,
             port=config.server.port,
-            log_level="info",
-            backlog=2048,  # 增大连接队列，支持突发流量
-            timeout_keep_alive=30,  # 保持连接 30 秒
-            h11_max_incomplete_event_size=None,  # 不限制请求大小
+            log_level=config.server.log_level.lower(),
+            backlog=2048,
+            timeout_keep_alive=30,
+            h11_max_incomplete_event_size=None,
+            access_log=False,  # 关闭访问日志
         )
     except KeyboardInterrupt:
-        logging.info("收到键盘中断，退出")
+        pass
     except Exception as e:
         logging.exception(f"服务异常退出: {e}")
 

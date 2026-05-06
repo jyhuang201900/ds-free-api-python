@@ -102,6 +102,7 @@ class ServerConfig(BaseModel):
     port: int = 5317
     api_tokens: list[ApiToken] = Field(default_factory=list)
     accounts_file: str = "accounts.txt"
+    log_level: str = "WARNING"  # DEBUG, INFO, WARNING, ERROR
 
 
 class AccountConfig(BaseModel):

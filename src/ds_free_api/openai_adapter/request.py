@@ -337,7 +337,7 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
         # 检查是否超限
         if current_tokens + part_tokens > MAX_PROMPT_TOKENS:
             # 超限，停止添加更旧的消息
-            logger.info(f"历史截断: 保留 {len(kept_parts)} 条消息，{current_tokens} tokens")
+            logger.debug(f"历史截断: 保留 {len(kept_parts)} 条消息，{current_tokens} tokens")
             break
 
         kept_parts.append(part)
@@ -358,7 +358,7 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
     # 日志：最终 token 数
     if enc:
         final_tokens = len(enc.encode(final_prompt))
-        logger.info(f"prompt 构建: {final_tokens} tokens, {len(kept_parts)} 条消息")
+        logger.debug(f"prompt 构建: {final_tokens} tokens, {len(kept_parts)} 条消息")
 
     return final_prompt
 

@@ -2,6 +2,9 @@
 host = "127.0.0.1"
 port = 5317
 
+# 日志级别: DEBUG, INFO, WARNING, ERROR (默认 WARNING)
+# log_level = "WARNING"
+
 # 账号文件路径（相对于 config.toml 所在目录，默认 accounts.txt）
 # accounts_file = "accounts.txt"
 
