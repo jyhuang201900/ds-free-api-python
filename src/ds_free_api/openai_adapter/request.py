@@ -162,32 +162,26 @@ def _validate(req: ChatCompletionRequest, registry: dict[str, str] | None = None
         raise BadRequestError("model 不能为空")
     if not req.messages:
         raise BadRequestError("messages 不能为空")
-    
+
     # 模型校验：使用 registry 动态校验（如果提供）
     if registry is not None:
         if req.model.lower() not in registry:
             raise BadRequestError(f"不支持的模型: {req.model}")
-    
+
     # 消息长度限制（防止滥用）
-    if len(req.messages) > 200:
-        raise BadRequestError("消息数量不能超过 200")
-    
-    # 单次遍历：内容长度 + 恶意检测 + tool 校验
-    total_content = 0
+    if len(req.messages) > 500:
+        raise BadRequestError("消息数量不能超过 500")
+
+    # 单次遍历：恶意检测 + tool 校验
     for msg in req.messages:
         content = msg.content.get_text() if msg.content else ""
-        total_content += len(content)
-        total_content += sum(len(tc.function.arguments) if tc.function else 0 for tc in (msg.tool_calls or []))
-        
-        if len(content) > 50000:
-            raise BadRequestError("单条消息过长")
+
+        if len(content) > 100000:
+            raise BadRequestError("单条消息过长（超过 100k 字符）")
         if content.count("{{") > 10 or content.count("}}") > 10:
             raise BadRequestError("消息内容包含过多模板语法")
         if msg.role == "tool" and not msg.tool_call_id:
             raise BadRequestError("tool 消息必须提供 tool_call_id")
-    
-    if total_content > 100000:
-        raise BadRequestError("请求内容过长，超过 100k tokens")
 
 
 # ============================================================================
@@ -359,7 +353,14 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
     parts.extend(kept_parts)
     parts.append("<|im_start|>assistant")
 
-    return "\n".join(parts)
+    final_prompt = "\n".join(parts)
+
+    # 日志：最终 token 数
+    if enc:
+        final_tokens = len(enc.encode(final_prompt))
+        logger.info(f"prompt 构建: {final_tokens} tokens, {len(kept_parts)} 条消息")
+
+    return final_prompt
 
 
 def _format_tool_calls(tool_calls: list) -> str:
