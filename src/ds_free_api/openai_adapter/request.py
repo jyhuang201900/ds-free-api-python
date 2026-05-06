@@ -238,14 +238,16 @@ def _extract_tools(req: ChatCompletionRequest) -> ToolContext:
 # ============================================================================
 
 
+# DeepSeek token 限制
+MAX_PROMPT_TOKENS = 80000  # 80k 安全阈值（DeepSeek 限制 100k）
+
+
 def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
-    """构建 prompt（完整历史模式）
+    """构建 prompt（完整历史模式 + 智能截断）
 
     将 OpenAI messages 转换为 ChatML 格式的完整对话历史，
-    确保上下文完整传递给 DeepSeek。
+    当超过 token 限制时，从旧到新截断历史消息。
     """
-    parts: list[str] = []
-
     # 构建 tool reminder 块
     tool_reminder = ""
     tools = tool_ctx.get("tools", [])
@@ -284,38 +286,77 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
 
         tool_reminder = "\n".join(tool_lines)
 
-    # 转换所有消息为 ChatML 格式
+    # 分离 system 消息和对话消息
+    system_msg = None
+    conversation_msgs = []
     for msg in req.messages:
+        if msg.role == "system":
+            system_msg = msg
+        else:
+            conversation_msgs.append(msg)
+
+    # 构建 system 部分（固定，不截断）
+    system_part = ""
+    if system_msg:
+        content = _get_message_text(system_msg)
+        if tool_reminder:
+            content = f"{content}\n\n{tool_reminder}" if content else tool_reminder
+        system_part = f"<|im_start|>system\n{content}<|im_end|>"
+    elif tool_reminder:
+        system_part = f"<|im_start|>system\n{tool_reminder}<|im_end|>"
+
+    # 计算固定部分的 token 数
+    enc = _get_tiktoken_enc()
+    fixed_tokens = 0
+    if enc:
+        fixed_tokens = len(enc.encode(system_part)) if system_part else 0
+        fixed_tokens += 10  # <|im_start|>assistant 预留
+
+    # 从新到旧遍历，保留能放下的消息
+    kept_parts: list[str] = []
+    current_tokens = fixed_tokens
+
+    # 倒序遍历（从最新消息开始）
+    for msg in reversed(conversation_msgs):
         role = msg.role
         content = _get_message_text(msg)
 
-        if role == "system":
-            # system 消息 + tool reminder
-            if tool_reminder:
-                content = f"{content}\n\n{tool_reminder}" if content else tool_reminder
-            parts.append(f"<|im_start|>system\n{content}<|im_end|>")
-        elif role == "user":
-            parts.append(f"<|im_start|>user\n{content}<|im_end|>")
+        if role == "user":
+            part = f"<|im_start|>user\n{content}<|im_end|>"
         elif role == "assistant":
-            # assistant 消息可能包含 tool_calls
             if msg.tool_calls:
-                # 将 tool_calls 转换为 <tool_calls> 格式
                 tool_calls_str = _format_tool_calls(msg.tool_calls)
                 if content:
                     content = f"{content}\n{tool_calls_str}"
                 else:
                     content = tool_calls_str
-            parts.append(f"<|im_start|>assistant\n{content}<|im_end|>")
+            part = f"<|im_start|>assistant\n{content}<|im_end|>"
         elif role == "tool":
-            # tool 响应：包含 tool_call_id
             tool_call_id = msg.tool_call_id or "unknown"
-            parts.append(f"<|im_start|>tool\ntool_call_id: {tool_call_id}\n{content}<|im_end|>")
+            part = f"<|im_start|>tool\ntool_call_id: {tool_call_id}\n{content}<|im_end|>"
+        else:
+            continue
 
-    # 如果没有 system 消息但有 tools，添加 tool reminder 作为 system
-    if tool_reminder and not any(m.role == "system" for m in req.messages):
-        parts.insert(0, f"<|im_start|>system\n{tool_reminder}<|im_end|>")
+        # 计算 token 数
+        part_tokens = len(enc.encode(part)) if enc else len(content) // 2
 
-    # 添加 assistant 开始标记（引导模型生成）
+        # 检查是否超限
+        if current_tokens + part_tokens > MAX_PROMPT_TOKENS:
+            # 超限，停止添加更旧的消息
+            logger.info(f"历史截断: 保留 {len(kept_parts)} 条消息，{current_tokens} tokens")
+            break
+
+        kept_parts.append(part)
+        current_tokens += part_tokens
+
+    # 反转回正序
+    kept_parts.reverse()
+
+    # 组装最终 prompt
+    parts: list[str] = []
+    if system_part:
+        parts.append(system_part)
+    parts.extend(kept_parts)
     parts.append("<|im_start|>assistant")
 
     return "\n".join(parts)
