@@ -280,24 +280,23 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
 
         tool_reminder = "\n".join(tool_lines)
 
-    # 分离 system 消息和对话消息
-    system_msg = None
+    # 分离 system 消息和对话消息（合并多个 system）
+    system_parts = []
     conversation_msgs = []
     for msg in req.messages:
         if msg.role == "system":
-            system_msg = msg
+            system_parts.append(_get_message_text(msg))
         else:
             conversation_msgs.append(msg)
+    system_content = "\n\n".join(p for p in system_parts if p)
 
     # 构建 system 部分（固定，不截断）
     system_part = ""
-    if system_msg:
-        content = _get_message_text(system_msg)
+    if system_content or tool_reminder:
+        content = system_content
         if tool_reminder:
             content = f"{content}\n\n{tool_reminder}" if content else tool_reminder
         system_part = f"<|im_start|>system\n{content}<|im_end|>"
-    elif tool_reminder:
-        system_part = f"<|im_start|>system\n{tool_reminder}<|im_end|>"
 
     # 计算固定部分的 token 数
     enc = _get_tiktoken_enc()
@@ -345,6 +344,23 @@ def _build_prompt(req: ChatCompletionRequest, tool_ctx: dict) -> str:
 
     # 反转回正序
     kept_parts.reverse()
+
+    # 确保至少有一条对话消息（避免空历史导致模型异常）
+    if not kept_parts and conversation_msgs:
+        # 强制保留最后一条消息
+        last_msg = conversation_msgs[-1]
+        role = last_msg.role
+        content = _get_message_text(last_msg)
+        if role == "user":
+            kept_parts.append(f"<|im_start|>user\n{content}<|im_end|>")
+        elif role == "assistant":
+            if last_msg.tool_calls:
+                tool_calls_str = _format_tool_calls(last_msg.tool_calls)
+                content = f"{content}\n{tool_calls_str}" if content else tool_calls_str
+            kept_parts.append(f"<|im_start|>assistant\n{content}<|im_end|>")
+        elif role == "tool":
+            tool_call_id = last_msg.tool_call_id or "unknown"
+            kept_parts.append(f"<|im_start|>tool\ntool_call_id: {tool_call_id}\n{content}<|im_end|>")
 
     # 组装最终 prompt
     parts: list[str] = []
