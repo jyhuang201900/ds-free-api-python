@@ -124,6 +124,12 @@ def create_app(config: Config) -> FastAPI:
                     status_code=413,
                     content={"error": {"message": "Request body too large (max 10MB)", "type": "invalid_request_error"}},
                 )
+            # chunked transfer encoding: check transfer-encoding header
+            transfer_encoding = request.headers.get("transfer-encoding", "")
+            if "chunked" in transfer_encoding.lower() and not content_length:
+                # Chunked requests without content-length are hard to limit at middleware level
+                # downstream handlers should still be safe due to asyncio/streaming limits
+                logger.debug("Chunked transfer encoding detected, size limit deferred to handler")
         return await call_next(request)
 
     # 注册路由

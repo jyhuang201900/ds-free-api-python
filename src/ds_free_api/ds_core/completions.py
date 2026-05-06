@@ -103,66 +103,75 @@ class Completions:
                     # 启动图片上传（异步，不阻塞 PoW 计算）
                     upload_task = asyncio.create_task(self._upload_images(token, image_attachments))
 
-                # 计算 PoW（completion 端点）
-                pow_header = await self._compute_pow(
-                    token, target_path="/api/v0/chat/completion", account=account,
-                )
-
-                # 等待图片上传完成（与 PoW 并行执行）
-                if upload_task is not None:
-                    try:
-                        file_ids = await upload_task
-                        ref_file_ids.extend(file_ids)
-                    except Exception as e:
-                        logger.warning(f"图片上传失败: {e}")
-
-                # 如果文件上传全部失败，附加提示
-                if has_attachments and not ref_file_ids:
-                    logger.info("所有文件上传失败或处理失败，prompt 中附加提示")
-
-                # 构建 completion payload
-                payload = CompletionPayload(
-                    chat_session_id=session_id,
-                    parent_message_id=parent_message_id,
-                    model_type=req.model_type,
-                    prompt=req.prompt,
-                    ref_file_ids=ref_file_ids,
-                    thinking_enabled=req.thinking_enabled,
-                    search_enabled=False if ref_file_ids else req.search_enabled,
-                    preempt=False,
-                )
-
                 try:
-                    async for chunk in self.client.completion_stream(token, pow_header, payload):
-                        yield chunk
-                    # completion 成功：增加消息计数
-                    account.incr_message_count(req.model_type)
-                except ClientError as e:
-                    # completion 失败时 fallback 到 edit_message
-                    logger.warning(f"completion 失败，fallback 到 edit_message: {e}")
+                    # 计算 PoW（completion 端点）
+                    pow_header = await self._compute_pow(
+                        token, target_path="/api/v0/chat/completion", account=account,
+                    )
+
+                    # 等待图片上传完成（与 PoW 并行执行）
+                    if upload_task is not None:
+                        try:
+                            file_ids = await upload_task
+                            ref_file_ids.extend(file_ids)
+                        except Exception as e:
+                            logger.warning(f"图片上传失败: {e}")
+
+                    # 如果文件上传全部失败，附加提示
+                    if has_attachments and not ref_file_ids:
+                        logger.info("所有文件上传失败或处理失败，prompt 中附加提示")
+
+                    # 构建 completion payload
+                    payload = CompletionPayload(
+                        chat_session_id=session_id,
+                        parent_message_id=parent_message_id,
+                        model_type=req.model_type,
+                        prompt=req.prompt,
+                        ref_file_ids=ref_file_ids,
+                        thinking_enabled=req.thinking_enabled,
+                        search_enabled=False if ref_file_ids else req.search_enabled,
+                        preempt=False,
+                    )
+
                     try:
-                        pow_header2 = await self._compute_pow(
-                            token, target_path="/api/v0/chat/edit_message", account=account,
-                        )
-                        fallback_payload = EditMessagePayload(
-                            chat_session_id=session_id,
-                            message_id=1,
-                            prompt=req.prompt,
-                            search_enabled=req.search_enabled,
-                            thinking_enabled=req.thinking_enabled,
-                            model_type=req.model_type,
-                        )
-                        async for chunk in self.client.edit_message_stream(token, pow_header2, fallback_payload):
+                        async for chunk in self.client.completion_stream(token, pow_header, payload):
                             yield chunk
-                        # fallback 成功：增加消息计数
+                        # completion 成功：增加消息计数
                         account.incr_message_count(req.model_type)
-                    except ClientError as e2:
-                        account.mark_unhealthy()
-                        raise CoreError.provider_error(str(e2))
-                except Exception as e:
-                    # 流式响应异常（客户端断开、网络错误等），记录后正常结束
-                    logger.warning(f"v0_chat 流式异常: {e}")
-                    return
+                    except ClientError as e:
+                        # completion 失败时 fallback 到 edit_message
+                        logger.warning(f"completion 失败，fallback 到 edit_message: {e}")
+                        try:
+                            pow_header2 = await self._compute_pow(
+                                token, target_path="/api/v0/chat/edit_message", account=account,
+                            )
+                            fallback_payload = EditMessagePayload(
+                                chat_session_id=session_id,
+                                message_id=1,
+                                prompt=req.prompt,
+                                search_enabled=req.search_enabled,
+                                thinking_enabled=req.thinking_enabled,
+                                model_type=req.model_type,
+                            )
+                            async for chunk in self.client.edit_message_stream(token, pow_header2, fallback_payload):
+                                yield chunk
+                            # fallback 成功：增加消息计数
+                            account.incr_message_count(req.model_type)
+                        except ClientError as e2:
+                            account.mark_unhealthy()
+                            raise CoreError.provider_error(str(e2))
+                    except Exception as e:
+                        # 流式响应异常（客户端断开、网络错误等），记录后正常结束
+                        logger.warning(f"v0_chat 流式异常: {e}")
+                        return
+                finally:
+                    # 确保取消未完成的图片上传任务，防止孤儿任务
+                    if upload_task is not None and not upload_task.done():
+                        upload_task.cancel()
+                        try:
+                            await upload_task
+                        except asyncio.CancelledError:
+                            pass
 
         except PoolError:
             raise CoreError.overloaded()

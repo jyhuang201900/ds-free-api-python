@@ -79,7 +79,7 @@ async def chat_completions(request: Request) -> Response:
                     # 发送错误 chunk 后正常结束
                     try:
                         yield b"data: {\"error\": {\"message\": \"stream error\"}}\n\n"
-                    except:
+                    except Exception:
                         pass
 
             return StreamingResponse(
@@ -168,7 +168,7 @@ async def anthropic_messages(request: Request) -> Response:
                     logger.warning(f"anthropic_messages 流式异常: {e}")
                     try:
                         yield b"data: {\"type\": \"error\", \"error\": {\"message\": \"stream error\"}}\n\n"
-                    except:
+                    except Exception:
                         pass
 
             return StreamingResponse(

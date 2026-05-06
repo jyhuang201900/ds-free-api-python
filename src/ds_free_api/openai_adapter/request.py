@@ -56,7 +56,7 @@ class AdapterRequest:
     image_attachments: list[dict] = field(default_factory=list)  # [{filename, content_type, data}]
 
 
-async def parse(body: bytes, registry: dict[str, str], *, _validate_model: bool = True) -> AdapterRequest:
+async def parse(body: bytes, registry: dict[str, str]) -> AdapterRequest:
     """解析 JSON 请求体（优化性能：使用快速验证模式）"""
     try:
         raw = json.loads(body)
