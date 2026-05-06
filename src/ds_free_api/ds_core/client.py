@@ -545,36 +545,41 @@ class DsClient:
         注意：completion 端点 HTTP 200 时可能仍含业务错误（biz_code 非 0），
         需检查首个 chunk。
         """
-        async with self.http.stream(
-            "POST",
-            f"{self.api_base}{EP_CHAT_COMPLETION}",
-            headers=self._auth_headers_with_pow(token, pow_response),
-            json=payload.model_dump(exclude_none=True),
-        ) as resp:
-            if resp.status_code >= 400:
-                body = await resp.aread()
-                raise HttpError(resp.status_code, body.decode(errors="replace"))
+        try:
+            async with self.http.stream(
+                "POST",
+                f"{self.api_base}{EP_CHAT_COMPLETION}",
+                headers=self._auth_headers_with_pow(token, pow_response),
+                json=payload.model_dump(exclude_none=True),
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise HttpError(resp.status_code, body.decode(errors="replace"))
 
-            first_chunk = True
-            async for chunk in self._with_idle_timeout(resp.aiter_bytes()):
-                if first_chunk:
-                    first_chunk = False
-                    # 检查是否为业务错误（非 SSE 格式的 JSON envelope）
-                    text = chunk.decode("utf-8", errors="replace").strip()
-                    if text.startswith("{") and "biz_code" in text:
-                        try:
-                            envelope = json.loads(text)
-                            biz_code = envelope.get("data", {}).get("biz_code", 0)
-                            biz_msg = envelope.get("data", {}).get("biz_msg", "")
-                            if biz_code != 0:
-                                raise ClientError(
-                                    f"completion 业务错误: biz_code={biz_code}, msg={biz_msg}"
-                                )
-                        except ClientError:
-                            raise
-                        except (json.JSONDecodeError, KeyError, TypeError):
-                            pass  # 非 envelope 格式，可能是 SSE 数据中碰巧包含 biz_code
-                yield chunk
+                first_chunk = True
+                async for chunk in self._with_idle_timeout(resp.aiter_bytes()):
+                    if first_chunk:
+                        first_chunk = False
+                        # 检查是否为业务错误（非 SSE 格式的 JSON envelope）
+                        text = chunk.decode("utf-8", errors="replace").strip()
+                        if text.startswith("{") and "biz_code" in text:
+                            try:
+                                envelope = json.loads(text)
+                                biz_code = envelope.get("data", {}).get("biz_code", 0)
+                                biz_msg = envelope.get("data", {}).get("biz_msg", "")
+                                if biz_code != 0:
+                                    raise ClientError(
+                                        f"completion 业务错误: biz_code={biz_code}, msg={biz_msg}"
+                                    )
+                            except ClientError:
+                                raise
+                            except (json.JSONDecodeError, KeyError, TypeError):
+                                pass  # 非 envelope 格式，可能是 SSE 数据中碰巧包含 biz_code
+                    yield chunk
+        except Exception as e:
+            # 客户端断开、网络错误等，记录后正常结束流
+            logger.warning(f"completion_stream 异常: {e}")
+            return
 
     async def edit_message_stream(
         self,
@@ -583,17 +588,21 @@ class DsClient:
         payload: EditMessagePayload,
     ) -> AsyncIterator[bytes]:
         """编辑消息流式接口（带空闲超时）"""
-        async with self.http.stream(
-            "POST",
-            f"{self.api_base}{EP_CHAT_EDIT_MESSAGE}",
-            headers=self._auth_headers_with_pow(token, pow_response),
-            json=payload.model_dump(exclude_none=True),
-        ) as resp:
-            if resp.status_code >= 400:
-                body = await resp.aread()
-                raise HttpError(resp.status_code, body.decode(errors="replace"))
-            async for chunk in self._with_idle_timeout(resp.aiter_bytes()):
-                yield chunk
+        try:
+            async with self.http.stream(
+                "POST",
+                f"{self.api_base}{EP_CHAT_EDIT_MESSAGE}",
+                headers=self._auth_headers_with_pow(token, pow_response),
+                json=payload.model_dump(exclude_none=True),
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise HttpError(resp.status_code, body.decode(errors="replace"))
+                async for chunk in self._with_idle_timeout(resp.aiter_bytes()):
+                    yield chunk
+        except Exception as e:
+            logger.warning(f"edit_message_stream 异常: {e}")
+            return
 
     async def update_title(self, token: str, payload: UpdateTitlePayload) -> None:
         resp = await self._request_with_retry(
