@@ -24,23 +24,34 @@ async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化，关闭时清理"""
     config: Config = app.state.config
     logger.info("初始化 OpenAI 适配器...")
-    adapter = await OpenAIAdapter.create(config)
-    anthropic_compat = AnthropicCompat(adapter)
-    api_tokens = [t.token for t in config.server.api_tokens]
+    try:
+        adapter = await OpenAIAdapter.create(config)
+        anthropic_compat = AnthropicCompat(adapter)
+        api_tokens = [t.token for t in config.server.api_tokens]
 
-    app.state.state = AppState(
-        adapter=adapter,
-        anthropic_compat=anthropic_compat,
-        api_tokens=api_tokens,
-    )
-    logger.info("服务就绪")
+        app.state.state = AppState(
+            adapter=adapter,
+            anthropic_compat=anthropic_compat,
+            api_tokens=api_tokens,
+        )
+        logger.info("服务就绪")
+    except Exception as e:
+        logger.exception(f"初始化失败: {e}")
+        raise
 
-    yield
+    try:
+        yield
+    except Exception as e:
+        logger.warning(f"lifespan yield 异常: {e}")
+        raise
 
     # 优雅关闭
     logger.info("正在关闭...")
-    await adapter.shutdown()
-    logger.info("已关闭")
+    try:
+        await adapter.shutdown()
+        logger.info("已关闭")
+    except Exception as e:
+        logger.warning(f"关闭异常: {e}")
 
 
 def create_app(config: Config) -> FastAPI:
