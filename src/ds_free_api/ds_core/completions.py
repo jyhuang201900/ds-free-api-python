@@ -170,6 +170,10 @@ class Completions:
                     except ClientError as e2:
                         account.mark_unhealthy()
                         raise CoreError.provider_error(str(e2))
+                except Exception as e:
+                    # 流式响应异常（客户端断开、网络错误等），记录后正常结束
+                    logger.warning(f"v0_chat 流式异常: {e}")
+                    return
 
         except PoolError:
             raise CoreError.overloaded()
@@ -178,6 +182,7 @@ class Completions:
         except CoreError:
             raise
         except Exception as e:
+            logger.warning(f"v0_chat 异常: {e}")
             raise CoreError.stream_error(str(e))
 
     async def _rotate_session(self, account: Account, model_type: str) -> None:
